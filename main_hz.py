@@ -18,12 +18,9 @@ def cic_response(f, R, N, fs):
 
     return H
 
-def design_fir_compensator(cfg, f):
+def design_fir_compensator(cfg, f, f_pass, gain_db):
 
     Hcic = cic_response(f, cfg.R, cfg.N, cfg.fs)
-
-    # >>> DEFINA SUA BANDA AQUI <<<
-    f_pass = 14e6   # <<< 22 MHz
 
     H_desired = np.zeros_like(f)
 
@@ -32,6 +29,15 @@ def design_fir_compensator(cfg, f):
 
     # FIR em Hz
     fir = signal.firwin2(cfg.taps, f, H_desired, fs=cfg.fs)
+
+    # mede ganho atual
+    w, h = signal.freqz(fir, fs=cfg.fs)
+    gain_current = np.max(np.abs(h))
+
+    # aplica ganho desejado
+    gain_target = 10**(gain_db / 20)
+
+    fir = fir * (gain_target / gain_current)
 
     return fir, Hcic, H_desired, f_pass
 
@@ -68,6 +74,11 @@ def plot_response(f, Hcic, h, H_total, f_pass):
 def quantize(phases, bits=16):
     scale = 2**(bits-1)
     return [np.round(p * scale).astype(int) for p in phases]
+
+def compute_shift(fir):
+    sum_h = np.sum(np.abs(fir))
+    shift = int(np.ceil(np.log2(sum_h)))
+    return shift, sum_h
 
 def generate_verilog(phases, M, filename="fir_poly.v"):
     taps = len(phases[0])
@@ -154,21 +165,30 @@ if __name__ == "__main__":
 
     cfg = CICFIRConfig(
         R=25,
-        N=3,
+        N=12,
         M=4,
-        taps=98,
+        taps=72,
         fs=100e6   # <<< 100 MHz
     )
 
     f = np.linspace(0, cfg.fs/2, 2048)
 
-    fir, Hcic, H_desired, f_pass = design_fir_compensator(cfg, f)
+    f_pass = 500e3
+
+    gain_db = 3
+
+    fir, Hcic, H_desired, f_pass = design_fir_compensator(cfg, f, f_pass, gain_db)
 
     w, h, H_total = simulate_system(f, fir, Hcic, cfg.fs)
 
     plot_response(f, Hcic, h, H_total, f_pass)
 
     phases = polyphase_decompose(fir, cfg.M)
+    
     phases_q = quantize(phases)
+
+    sh_fir, sh_sum = compute_shift(fir)
+
+    print("Shift:",sh_fir)
 
     generate_verilog(phases_q, cfg.M)
